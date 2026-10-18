@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+dnspython
+httpx
+cryptography
+beautifulsoup4
+shodan
+theHarvester
+python-whois
+phonenumbers
+websockets
