@@ -30,6 +30,22 @@ class WebSocketOriginTests(unittest.TestCase):
                     websocket.send_json({"query": "example.com"})
                     self.assertEqual(websocket.receive_json()["type"], "root")
                     self.assertEqual(websocket.receive_json()["type"], "done")
+    def test_formatted_phone_number_is_scanned_as_phone(self):
+        with (
+            patch("main.check_username", new_callable=AsyncMock, return_value={}),
+            patch("main.check_dorking", new_callable=AsyncMock, return_value={}),
+            patch("main.check_github_commits", new_callable=AsyncMock, return_value={}),
+            TestClient(main.app) as client,
+        ):
+            with client.websocket_connect("/ws/scan") as websocket:
+                websocket.send_json({"query": "+1 (415) 555-2671"})
+                root = websocket.receive_json()
+                result = websocket.receive_json()
+                done = websocket.receive_json()
+
+        self.assertEqual(root["data"]["input_type"], "phone")
+        self.assertEqual(result["data"]["title"], "Информация о телефоне")
+        self.assertEqual(done["type"], "done")
     def test_domain_fetch_does_not_follow_redirects(self):
         requested_urls = []
         requests = []
@@ -150,6 +166,16 @@ class WebSocketOriginTests(unittest.TestCase):
             result = asyncio.run(check_email_infrastructure("user@example.com/path"))
         self.assertEqual(result["status"], "error")
         resolver.assert_not_awaited()
+    def test_email_infrastructure_rejects_invalid_local_part_without_dns(self):
+        for email in ("@example.com", "user name@example.com"):
+            with self.subTest(email=email), patch(
+                "modules.email_infrastructure.dns.asyncresolver.resolve",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as resolver:
+                result = asyncio.run(check_email_infrastructure(email))
+            self.assertEqual(result["status"], "error")
+            resolver.assert_not_awaited()
     def test_blackbird_is_explicitly_marked_as_demo(self):
         result = asyncio.run(check_blackbird("person@example.com"))
         self.assertEqual(result["status"], "info")

@@ -9,3 +9,4 @@ theHarvester
 python-whois
 phonenumbers
 websockets
+python-dotenv

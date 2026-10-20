@@ -6,7 +6,10 @@ import dns.resolver
 def _normalize_domain(email: str) -> str | None:
     if email.count("@") != 1:
         return None
-    domain = email.rsplit("@", 1)[1].rstrip(".")
+    local_part, domain = email.split("@", 1)
+    if not local_part or any(character.isspace() for character in local_part):
+        return None
+    domain = domain.rstrip(".")
     try:
         domain = domain.encode("idna").decode("ascii").lower()
     except UnicodeError:

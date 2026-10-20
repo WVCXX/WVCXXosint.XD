@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 
 if __package__:
     from .modules.blackbird import check_blackbird
+    from .modules.config import HIBP_API_KEY
     from .modules.dorking import check_dorking
     from .modules.email_infrastructure import check_email_infrastructure
     from .modules.github_commits import check_github_commits
@@ -28,6 +29,7 @@ if __package__:
     from .modules.whois import check_whois
 else:
     from modules.blackbird import check_blackbird
+    from modules.config import HIBP_API_KEY
     from modules.dorking import check_dorking
     from modules.email_infrastructure import check_email_infrastructure
     from modules.github_commits import check_github_commits
@@ -54,6 +56,8 @@ app.add_middleware(
 async def check_hibp(email: str):
     url = f"https://haveibeenpwned.com/api/v3/breachedaccount/{quote(email, safe='')}?truncateResponse=false"
     headers = {"User-Agent": "OSINT-Spider-MVP"}
+    if HIBP_API_KEY:
+        headers["hibp-api-key"] = HIBP_API_KEY
     async with httpx.AsyncClient() as client:
         try:
             res = await client.get(url, headers=headers, timeout=5.0)
@@ -240,7 +244,10 @@ async def websocket_scan(websocket: WebSocket):
         if not query:
             await websocket.send_json({"error": "Пустой запрос"})
             return
-        is_phone = bool(re.fullmatch(r"\+?\d{10,15}", query))
+        is_phone = (
+            bool(re.fullmatch(r"\+?[0-9\s().-]+", query))
+            and 10 <= len(re.sub(r"[^0-9]", "", query)) <= 15
+        )
         is_email = query.count("@") == 1 and "." in query.rsplit("@", 1)[1]
         is_domain = "." in query and " " not in query and not is_phone
         if is_email:

@@ -1,9 +1,17 @@
 import shodan
 from fastapi import HTTPException
-API_KEY = ""
+from .config import SHODAN_API_KEY
+
+
 async def check_shodan(ip: str):
+    if not SHODAN_API_KEY:
+        return {
+            "title": "Shodan",
+            "status": "info",
+            "fields": [{"label": "Статус", "value": "Добавьте SHODAN_API_KEY в backend/.env"}],
+        }
     try:
-        api = shodan.Shodan(API_KEY)
+        api = shodan.Shodan(SHODAN_API_KEY)
         host = api.host(ip)
         ports = ", ".join([str(p) for p in host.get('ports', [])[:5]])
         os = host.get('os', 'Неизвестно')

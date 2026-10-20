@@ -1,6 +1,6 @@
 import phonenumbers
 from phonenumbers import geocoder, carrier
-def check_phone(phone: str):
+async def check_phone(phone: str):
     try:
         if not phone.startswith('+'):
             phone = '+' + phone
