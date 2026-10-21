@@ -80,10 +80,10 @@ async def check_email_infrastructure(email: str) -> dict:
     mx_server = ", ".join(mx_servers) if mx_servers else (
         "Не удалось проверить" if isinstance(mx_records, Exception) else "Не найден"
     )
-    deliverability = (
+    mx_status = (
         "Не удалось проверить"
         if isinstance(mx_records, Exception)
-        else ("Подтверждена" if mx_servers else "Не подтверждена")
+        else ("MX-записи найдены" if mx_servers else "MX-записи не найдены")
     )
     spf_configured = any(value.lower().startswith("v=spf1") for value in txt_values)
     dmarc_configured = any(value.lower().startswith("v=dmarc1") for value in dmarc_values)
@@ -109,7 +109,7 @@ async def check_email_infrastructure(email: str) -> dict:
         "fields": [
             {"label": "Провайдер", "value": _provider(mx_servers[0]) if mx_servers else "Не определён"},
             {"label": "MX Сервер", "value": mx_server},
-            {"label": "Доставляемость", "value": deliverability},
+            {"label": "MX-записи", "value": mx_status},
             {"label": "Безопасность", "value": security},
         ],
     }

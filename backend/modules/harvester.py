@@ -1,18 +1,28 @@
 import asyncio
 import re
 async def run_theharvester(domain: str):
+    process = None
     try:
         process = await asyncio.create_subprocess_exec(
             'theHarvester', '-d', domain, '-b', 'bing', '-l', '50',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=25)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return {
+                "title": "TheHarvester",
+                "status": "error",
+                "fields": [{"label": "Ошибка", "value": "Проверка превысила лимит времени"}],
+            }
         if process.returncode != 0:
             return {
                 "title": "TheHarvester (Email)",
                 "status": "error",
-                "fields": [{"label": "Ошибка", "value": "Не удалось запустить утилиту"}]
+                "fields": [{"label": "Ошибка", "value": "TheHarvester завершился с ошибкой"}]
             }
         output = stdout.decode('utf-8', errors='ignore')
         emails = set(re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', output))
@@ -25,17 +35,17 @@ async def run_theharvester(domain: str):
         if not fields:
             return {
                 "title": "TheHarvester",
-                "status": "info",
+                "status": "no_results",
                 "fields": [{"label": "Статус", "value": "Ничего не найдено"}]
             }
         return {
             "title": "TheHarvester",
-            "status": "ok",
+            "status": "completed",
             "fields": fields
         }
-    except Exception as e:
+    except (OSError, asyncio.SubprocessError):
         return {
             "title": "TheHarvester",
-            "status": "error",
-            "fields": [{"label": "Ошибка", "value": str(e)}]
+            "status": "not_configured" if process is None else "error",
+            "fields": [{"label": "Ошибка", "value": "TheHarvester недоступен или не удалось запустить проверку"}]
         }

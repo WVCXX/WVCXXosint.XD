@@ -17,5 +17,5 @@ async def check_phone(phone: str):
                 {"label": "Оператор", "value": carrier_name or "Неизвестно"}
             ]
         }
-    except Exception as e:
-        return {"title": "Телефон", "status": "error", "fields": [{"label": "Ошибка", "value": str(e)}]}
+    except (phonenumbers.NumberParseException, ValueError):
+        return {"title": "Телефон", "status": "error", "fields": [{"label": "Ошибка", "value": "Не удалось разобрать номер"}]}

@@ -21,10 +21,17 @@ export default function NodeCard({ data }) {
     query = '',
     inputType = '',
   } = data || {};
+  const displayStatus = data?.state || status;
   const statusLabels = {
     ok: 'Подтверждено',
+    completed: 'Завершено',
     error: 'Ошибка',
+    failed: 'Ошибка',
     info: 'Информация',
+    partial: 'Частичный результат',
+    no_results: 'Нет результатов',
+    rate_limited: 'Лимит запросов',
+    not_configured: 'Не подключено',
     loading: 'Загрузка',
     root: 'Объект',
   };
@@ -35,14 +42,14 @@ export default function NodeCard({ data }) {
       : 'карточек';
 
   return (
-    <article className={`node-card status-${status}${isRoot ? ' node-card-root' : ''}${isCategory ? ' node-card-category' : ''}`}>
+    <article className={`node-card status-${displayStatus}${isRoot ? ' node-card-root' : ''}${isCategory ? ' node-card-category' : ''}`}>
       <Handle type="target" position={Position.Top} isConnectable={false} />
       <div className="node-status-rail" />
       <div className="node-card-content">
         <header className="node-card-header">
           <h3>{title}</h3>
           {!isRoot && !isCategory ? (
-            <span className="node-status-label">{statusLabels[status] || statusLabels.info}</span>
+            <span className="node-status-label">{statusLabels[displayStatus] || statusLabels.info}</span>
           ) : null}
         </header>
 
@@ -56,7 +63,7 @@ export default function NodeCard({ data }) {
             <span>ГРУППА РЕЗУЛЬТАТОВ</span>
             <span>{count} {countLabel}</span>
           </div>
-        ) : status === 'loading' ? (
+        ) : displayStatus === 'loading' ? (
           <SkeletonFields />
         ) : (
           <div className="node-fields">
