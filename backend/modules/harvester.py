@@ -1,5 +1,6 @@
 import asyncio
 import re
+import subprocess
 async def run_theharvester(domain: str):
     process = None
     try:
@@ -43,7 +44,7 @@ async def run_theharvester(domain: str):
             "status": "completed",
             "fields": fields
         }
-    except (OSError, asyncio.SubprocessError):
+    except (OSError, subprocess.SubprocessError):
         return {
             "title": "TheHarvester",
             "status": "not_configured" if process is None else "error",

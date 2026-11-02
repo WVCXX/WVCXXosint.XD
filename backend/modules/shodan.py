@@ -1,18 +1,19 @@
 import asyncio
 
 import shodan
-from .config import SHODAN_API_KEY
+from .config import get_api_key
 
 
 async def check_shodan(ip: str):
-    if not SHODAN_API_KEY:
+    api_key = get_api_key("shodan")
+    if not api_key:
         return {
             "title": "Shodan",
             "status": "not_configured",
-            "fields": [{"label": "Статус", "value": "Добавьте SHODAN_API_KEY в backend/.env"}],
+            "fields": [{"label": "Статус", "value": "Добавьте API-ключ Shodan в Настройках приложения"}],
         }
     try:
-        api = shodan.Shodan(SHODAN_API_KEY, timeout=8)
+        api = shodan.Shodan(api_key, timeout=8)
         host = await asyncio.wait_for(asyncio.to_thread(api.host, ip), timeout=10)
         ports = ", ".join([str(p) for p in host.get('ports', [])[:5]])
         os = host.get('os', 'Неизвестно')

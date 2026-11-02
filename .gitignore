@@ -8,6 +8,9 @@ env/
 .env
 .env.*
 !.env.example
+backend/monitoring.db
+backend/settings.json
+backend/.settings-*
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

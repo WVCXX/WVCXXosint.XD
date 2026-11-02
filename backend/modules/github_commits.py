@@ -3,7 +3,7 @@ from urllib.parse import quote_plus
 
 import httpx
 
-from .config import GITHUB_TOKEN
+from .config import get_api_key
 
 
 async def check_github_commits(query: str) -> dict:
@@ -29,8 +29,9 @@ async def check_github_commits(query: str) -> dict:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    if GITHUB_TOKEN:
-        headers["Authorization"] = "Bearer " + GITHUB_TOKEN
+    github_token = get_api_key("github")
+    if github_token:
+        headers["Authorization"] = "Bearer " + github_token
 
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:

@@ -1,6 +1,6 @@
 import shutil
 
-from .config import HIBP_API_KEY, SHODAN_API_KEY
+from .config import get_api_key, get_api_key_statuses
 
 
 TOOLS = [
@@ -62,6 +62,7 @@ TOOLS = [
         "status": "available",
         "requires_api_key": False,
         "optional_api_key": "GITHUB_TOKEN",
+        "api_key_providers": ["github"],
         "description": "Searches public commit metadata; a token raises the GitHub API rate limit.",
         "source_url": "https://docs.github.com/en/rest/search/search",
     },
@@ -90,9 +91,10 @@ TOOLS = [
         "name": "Have I Been Pwned",
         "category": "Reputation",
         "input_types": ["email"],
-        "status": "available" if HIBP_API_KEY else "not_configured",
+        "status": "available" if get_api_key("hibp") else "not_configured",
         "requires_api_key": True,
         "api_key_env": "HIBP_API_KEY",
+        "api_key_providers": ["hibp"],
         "description": "Returns public breach names only; breach contents and passwords are never fetched.",
         "source_url": "https://haveibeenpwned.com/API/v3",
     },
@@ -101,9 +103,10 @@ TOOLS = [
         "name": "Shodan",
         "category": "Reputation",
         "input_types": ["ip", "domain", "url"],
-        "status": "available" if SHODAN_API_KEY else "not_configured",
+        "status": "available" if get_api_key("shodan") else "not_configured",
         "requires_api_key": True,
         "api_key_env": "SHODAN_API_KEY",
+        "api_key_providers": ["shodan"],
         "description": "Requires a server-side Shodan API key.",
         "source_url": "https://developer.shodan.io/api",
     },
@@ -172,9 +175,9 @@ TOOLS = [
         "name": "WhatsMyName",
         "category": "Public profiles",
         "input_types": ["username"],
-        "status": "not_configured",
+        "status": "available",
         "requires_api_key": False,
-        "description": "Dataset adapter is not configured.",
+        "description": "Public dataset requests; a profile is confirmed only by an exact body-code match, never by HTTP status alone.",
         "source_url": "https://github.com/WebBreacher/WhatsMyName",
     },
     {
@@ -195,6 +198,7 @@ TOOLS = [
         "status": "not_configured",
         "requires_api_key": True,
         "api_key_env": "VIRUSTOTAL_API_KEY",
+        "api_key_providers": ["virustotal"],
         "description": "Adapter is not implemented; adding a key alone does not enable lookups.",
         "source_url": "https://docs.virustotal.com/reference/overview",
     },
@@ -206,6 +210,7 @@ TOOLS = [
         "status": "not_configured",
         "requires_api_key": True,
         "api_key_env": "ABUSEIPDB_API_KEY",
+        "api_key_providers": ["abuseipdb"],
         "description": "Adapter is not implemented; adding a key alone does not enable lookups.",
         "source_url": "https://www.abuseipdb.com/api.html",
     },
@@ -217,6 +222,7 @@ TOOLS = [
         "status": "not_configured",
         "requires_api_key": True,
         "api_key_env": "CENSYS_API_ID / CENSYS_API_SECRET",
+        "api_key_providers": ["censys_id", "censys_secret"],
         "description": "Adapter is not implemented.",
         "source_url": "https://docs.censys.com/",
     },
@@ -228,6 +234,7 @@ TOOLS = [
         "status": "not_configured",
         "requires_api_key": True,
         "api_key_env": "URLSCAN_API_KEY",
+        "api_key_providers": ["urlscan"],
         "description": "Adapter is not implemented; scans are not submitted.",
         "source_url": "https://urlscan.io/docs/",
     },
@@ -239,6 +246,7 @@ TOOLS = [
         "status": "not_configured",
         "requires_api_key": True,
         "api_key_env": "SEARCH_API_KEY",
+        "api_key_providers": ["search"],
         "description": "No search provider is configured; links and templates are not counted as findings.",
         "source_url": None,
     },
@@ -247,9 +255,9 @@ TOOLS = [
         "name": "ExifTool",
         "category": "Metadata",
         "input_types": ["file"],
-        "status": "not_configured",
+        "status": "available" if shutil.which("exiftool") else "not_configured",
         "requires_api_key": False,
-        "description": "No file upload or metadata adapter is available in this application.",
+        "description": "Local metadata extraction for uploaded files; the binary must be installed on the server.",
         "source_url": "https://exiftool.org/",
     },
     {
@@ -257,23 +265,34 @@ TOOLS = [
         "name": "Organization registers",
         "category": "Organization",
         "input_types": ["organization"],
-        "status": "not_configured",
+        "status": "available",
         "requires_api_key": False,
-        "description": "No organization registry adapter is configured.",
-        "source_url": None,
+        "description": "GitHub public organization API and Wikidata entity search; field availability depends on the source.",
+        "source_url": "https://www.wikidata.org/",
     },
     {
         "id": "wayback",
         "name": "Internet Archive",
         "category": "Website",
         "input_types": ["domain", "url"],
-        "status": "not_configured",
+        "status": "available",
         "requires_api_key": False,
-        "description": "Archive lookup is not yet connected.",
+        "description": "Public availability API reports the closest archived snapshot timestamp and URL.",
         "source_url": "https://web.archive.org/",
     },
 ]
 
 
 def get_tools() -> list[dict]:
-    return [tool.copy() for tool in TOOLS]
+    key_statuses = {item["provider"]: item for item in get_api_key_statuses()}
+    tools = []
+    for tool in TOOLS:
+        item = tool.copy()
+        providers = item.get("api_key_providers", [])
+        if providers:
+            provider_statuses = [key_statuses[provider] for provider in providers]
+            item["api_key_configured"] = all(status["configured"] for status in provider_statuses)
+            item["api_key_any_configured"] = any(status["configured"] for status in provider_statuses)
+            item["adapter_implemented"] = all(status["adapter_implemented"] for status in provider_statuses)
+        tools.append(item)
+    return tools

@@ -1,11 +1,7 @@
 import asyncio
 import logging
-
 import whois
-
 logger = logging.getLogger(__name__)
-
-
 async def check_whois(domain: str):
     try:
         w = await asyncio.wait_for(asyncio.to_thread(whois.whois, domain), timeout=10)

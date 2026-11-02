@@ -1,5 +1,8 @@
 import asyncio
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 import httpx
@@ -11,6 +14,8 @@ from modules.blackbird import check_blackbird
 from modules.email_infrastructure import check_email_infrastructure
 from modules.github_commits import check_github_commits
 from modules.google_account import check_google_account
+from modules.whatsmyname import check_whatsmyname as check_whatsmyname_package
+from modules.whatsmyname import classify_site_response
 
 
 class FakeWebSocket:
@@ -29,7 +34,76 @@ class WebSocketOriginTests(unittest.TestCase):
         tools = {tool["id"]: tool for tool in response.json()["tools"]}
         self.assertEqual(tools["google-metadata"]["status"], "not_configured")
         self.assertEqual(tools["blackbird"]["status"], "not_configured")
-        self.assertEqual(tools["organization-registers"]["status"], "not_configured")
+        self.assertEqual(tools["wayback"]["status"], "available")
+        self.assertEqual(tools["whatsmyname"]["status"], "available")
+        self.assertEqual(tools["organization-registers"]["status"], "available")
+
+    def test_api_key_settings_store_secrets_locally_without_returning_them(self):
+        secret = "test-github-token"
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            with (
+                patch("modules.config.SETTINGS_PATH", settings_path),
+                patch.dict(os.environ, {"GITHUB_TOKEN": ""}),
+                TestClient(main.app, client=("127.0.0.1", 8000)) as client,
+            ):
+                headers = {"Origin": "http://localhost:5173"}
+                response = client.put(
+                    "/api/settings/keys/github",
+                    json={"value": secret},
+                    headers=headers,
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn(secret, response.text)
+                self.assertEqual(settings_path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(main.get_api_key("github"), secret)
+
+                status = client.get("/api/settings/keys", headers=headers)
+                self.assertEqual(status.status_code, 200)
+                self.assertNotIn(secret, status.text)
+                github = next(key for key in status.json()["keys"] if key["provider"] == "github")
+                self.assertEqual(github, {
+                    "provider": "github",
+                    "configured": True,
+                    "source": "application",
+                    "adapter_implemented": True,
+                })
+                providers = {key["provider"] for key in status.json()["keys"]}
+                self.assertEqual(providers, {
+                    "github", "hibp", "shodan", "virustotal", "abuseipdb",
+                    "censys_id", "censys_secret", "urlscan", "search",
+                })
+
+                deleted = client.delete("/api/settings/keys/github", headers=headers)
+                self.assertEqual(deleted.status_code, 200)
+                self.assertEqual(settings_path.read_text(encoding="utf-8"), "{}")
+                self.assertEqual(main.get_api_key("github"), "")
+
+                forbidden_origin = client.get(
+                    "/api/settings/keys",
+                    headers={"Origin": "https://untrusted.example"},
+                )
+                self.assertEqual(forbidden_origin.status_code, 403)
+
+    def test_api_key_settings_reject_remote_clients(self):
+        with TestClient(main.app, client=("192.0.2.10", 8000)) as client:
+            response = client.get(
+                "/api/settings/keys",
+                headers={"Origin": "http://localhost:5173"},
+            )
+        self.assertEqual(response.status_code, 403)
+
+    def test_catalog_separates_saved_key_from_unimplemented_adapter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            with patch("modules.config.SETTINGS_PATH", settings_path):
+                main.set_api_key("virustotal", "test-virustotal-token")
+                with TestClient(main.app) as client:
+                    tools = {tool["id"]: tool for tool in client.get("/api/tools").json()["tools"]}
+        virustotal = tools["virustotal"]
+        self.assertEqual(virustotal["status"], "not_configured")
+        self.assertTrue(virustotal["api_key_configured"])
+        self.assertFalse(virustotal["adapter_implemented"])
 
     def test_query_validation_rejects_private_targets_and_nonstandard_ports(self):
         self.assertEqual(main._validate_query("127.0.0.1", "ip")[1], "Разрешены только публичные IP-адреса")
@@ -38,7 +112,7 @@ class WebSocketOriginTests(unittest.TestCase):
         self.assertEqual(main._validate_query("https://example.com/path", "url"), ("example.com", None))
 
     def test_hibp_without_key_is_not_configured_and_makes_no_request(self):
-        with patch("main.HIBP_API_KEY", ""), patch("main.httpx.AsyncClient") as client:
+        with patch("main.get_api_key", return_value=""), patch("main.httpx.AsyncClient") as client:
             result = asyncio.run(main.check_hibp("person@example.com"))
         self.assertEqual(result["status"], "not_configured")
         client.assert_not_called()
@@ -106,7 +180,7 @@ class WebSocketOriginTests(unittest.TestCase):
             }))],
             "octocat",
         ))
-        result = websocket.sent[0]["data"]
+        result = next(message["data"] for message in websocket.sent if message["type"] == "node")
         self.assertEqual(result["query"], "octocat")
         self.assertEqual(result["entity_type"], "OSINT Module")
         self.assertEqual(result["state"], "completed")
@@ -140,11 +214,15 @@ class WebSocketOriginTests(unittest.TestCase):
             with client.websocket_connect("/ws/scan") as websocket:
                 websocket.send_json({"query": "+1 (415) 555-2671"})
                 root = websocket.receive_json()
-                result = websocket.receive_json()
+                message = websocket.receive_json()
+                while message["type"] in ("progress", "loading"):
+                    message = websocket.receive_json()
                 done = websocket.receive_json()
+                while done["type"] in ("progress", "loading"):
+                    done = websocket.receive_json()
 
         self.assertEqual(root["data"]["input_type"], "phone")
-        self.assertEqual(result["data"]["title"], "Информация о телефоне")
+        self.assertEqual(message["data"]["title"], "Информация о телефоне")
         self.assertEqual(done["type"], "done")
 
     def test_explicit_username_type_does_not_become_a_domain(self):
@@ -172,9 +250,7 @@ class WebSocketOriginTests(unittest.TestCase):
         async def resolve_public_domain(name, record_type):
             if record_type == "A":
                 return [SimpleNamespace(address="93.184.216.34")]
-            if record_type == "AAAA":
-                raise dns.resolver.NoAnswer
-            if record_type == "MX":
+            if record_type in ("AAAA", "MX", "NS", "TXT"):
                 raise dns.resolver.NoAnswer
             raise AssertionError(f"Unexpected DNS query: {name} {record_type}")
 
@@ -199,12 +275,13 @@ class WebSocketOriginTests(unittest.TestCase):
             patch("main.run_theharvester", new_callable=AsyncMock, return_value={}),
             patch("main.check_whois", new_callable=AsyncMock, return_value={}),
             patch("main.check_shodan", new_callable=AsyncMock, return_value={"title": "Shodan", "status": "not_configured", "fields": []}),
+            patch("main.check_wayback", new_callable=AsyncMock, return_value={}),
             patch("main.httpx.AsyncClient", side_effect=async_client_factory),
         ):
             nodes = asyncio.run(main.get_domain_nodes("example.com"))
         self.assertEqual(requested_urls, ["https://93.184.216.34/"])
         self.assertEqual(requests[0].headers["host"], "example.com")
-        self.assertEqual(requests[0].extensions["sni_hostname"], b"example.com")
+        self.assertEqual(requests[0].extensions["sni_hostname"], "example.com")
         website = next(node for node in nodes if node.get("title") == "Веб-сайт")
         self.assertEqual(website["fields"][0]["value"], "302")
 
@@ -226,9 +303,7 @@ class WebSocketOriginTests(unittest.TestCase):
         async def resolve_private_domain(name, record_type):
             if record_type == "A":
                 return [SimpleNamespace(address="127.0.0.1")]
-            if record_type == "AAAA":
-                raise dns.resolver.NoAnswer
-            if record_type == "MX":
+            if record_type in ("AAAA", "MX", "NS", "TXT"):
                 raise dns.resolver.NoAnswer
             raise AssertionError(f"Unexpected DNS query: {name} {record_type}")
 
@@ -242,7 +317,7 @@ class WebSocketOriginTests(unittest.TestCase):
             patch("main.check_shodan", new_callable=AsyncMock) as check_shodan,
             patch("main.run_theharvester", new_callable=AsyncMock, return_value={}),
             patch("main.check_whois", new_callable=AsyncMock, return_value={}),
-            patch("main.check_dorking", new_callable=AsyncMock, return_value={}),
+            patch("main.check_wayback", new_callable=AsyncMock, return_value={}),
         ):
             nodes = asyncio.run(main.get_domain_nodes("example.com"))
 
@@ -326,8 +401,8 @@ class WebSocketOriginTests(unittest.TestCase):
             "modules.github_commits.httpx.AsyncClient",
             side_effect=async_client_factory,
         ), patch(
-            "modules.github_commits.GITHUB_TOKEN",
-            "test-token",
+            "modules.github_commits.get_api_key",
+            return_value="test-token",
         ):
             result = asyncio.run(check_github_commits("octocat"))
         self.assertEqual(result["status"], "completed")
@@ -373,8 +448,8 @@ class WebSocketOriginTests(unittest.TestCase):
             main._stream_checks(
                 websocket,
                 [
-                    ("slow", delayed_result("slow", 0.03)),
-                    ("fast", delayed_result("fast", 0.001)),
+                    ("slow", "profiles", delayed_result("slow", 0.03)),
+                    ("fast", "profiles", delayed_result("fast", 0.001)),
                 ],
                 "",
             )
@@ -385,5 +460,143 @@ class WebSocketOriginTests(unittest.TestCase):
             if message["type"] == "node"
         ]
         self.assertEqual(titles, ["fast", "slow"])
+
+    def test_websocket_retry_runs_only_selected_check_titles(self):
+        async def result(title):
+            return {"title": title, "status": "completed", "fields": []}
+
+        checks = [
+            ("keep", "profiles", result("keep")),
+            ("retry", "profiles", result("retry")),
+        ]
+        with TestClient(main.app) as client:
+            with patch("main._compose_checks", new_callable=AsyncMock, return_value=checks):
+                with client.websocket_connect("/ws/scan") as websocket:
+                    websocket.send_json({
+                        "query": "octocat",
+                        "query_type": "username",
+                        "retry_titles": ["retry"],
+                    })
+                    messages = []
+                    while True:
+                        message = websocket.receive_json()
+                        messages.append(message)
+                        if message["type"] == "done":
+                            break
+
+        loading_titles = [message["data"]["title"] for message in messages if message["type"] == "loading"]
+        nodes = [message["data"] for message in messages if message["type"] == "node"]
+        self.assertEqual(loading_titles, ["retry"])
+        self.assertEqual([node["check_title"] for node in nodes], ["retry"])
+    def test_loading_placeholders_are_streamed_before_results(self):
+        websocket = FakeWebSocket()
+        async def delayed_result(title, delay):
+            await asyncio.sleep(delay)
+            return {"title": title, "status": "info", "fields": []}
+        asyncio.run(
+            main._stream_checks(
+                websocket,
+                [("slow", "profiles", delayed_result("slow", 0.03))],
+                "octocat",
+            )
+        )
+        kinds = [message["type"] for message in websocket.sent]
+        self.assertEqual(kinds[0], "loading")
+        self.assertEqual(kinds.count("loading"), 1)
+        for message in websocket.sent:
+            if message["type"] == "node":
+                self.assertEqual(message["data"]["state"], "partial")
+                self.assertEqual(message["data"]["category"], "profiles")
+                self.assertIsNotNone(message["data"]["confidence"])
+                self.assertEqual(message["data"]["check_id"], websocket.sent[0]["data"]["check_id"])
+    def test_whatsmyname_classifies_by_code_and_body_marker(self):
+        self.assertEqual(
+            classify_site_response({"e_code": 200, "e_string": "FOUND!"}, 200, "it was FOUND! here"),
+            "confirmed",
+        )
+        self.assertEqual(classify_site_response({"e_code": 200}, 200, "anything"), "possible")
+        self.assertEqual(classify_site_response({"e_code": 200, "e_string": "found"}, 404, ""), "absent")
+        self.assertEqual(classify_site_response({"e_code": 200, "e_string": "found"}, 301, ""), "inconclusive")
+    def test_whatsmyname_probe_uses_dataset_with_body_markers(self):
+        dataset = {
+            "sites": [
+                {"name": "Site A", "uri_check": "https://sitea.example/{account}", "method": "GET", "e_code": 200, "e_string": "welcome"},
+                {"name": "Site B", "uri_check": "https://siteb.example/{account}", "method": "GET", "e_code": 200},
+            ]
+        }
+
+        def handler(request):
+            host = request.url.host
+            if host == "raw.githubusercontent.com":
+                requested.append(str(request.url))
+                return httpx.Response(200, json=dataset, request=request)
+            if host == "sitea.example":
+                return httpx.Response(200, text="welcome to profile", request=request)
+            if host == "siteb.example":
+                return httpx.Response(404, text="", request=request)
+            raise AssertionError(f"Unexpected host: {host}")
+
+        requested = []
+        transport = httpx.MockTransport(handler)
+        actual_async_client = httpx.AsyncClient
+
+        def async_client_factory(*args, **kwargs):
+            return actual_async_client(*args, transport=transport, **kwargs)
+
+        with (
+            patch("modules.whatsmyname.httpx.AsyncClient", side_effect=async_client_factory),
+            patch("modules.whatsmyname._cache", {"loaded_at": 0.0, "dataset": []}),
+        ):
+            result = asyncio.run(check_whatsmyname_package("octocat"))
+        self.assertEqual(result["status"], "completed")
+        labels = [field["label"] for field in result["fields"]]
+        self.assertIn("Ссылки", labels)
+        confirmed = next(field for field in result["fields"] if field["label"] == "Подтверждено")
+        self.assertIn("Site A", confirmed["value"])
+    def test_exif_endpoint_reports_not_configured_without_binary(self):
+        with patch("modules.exiftool.shutil.which", return_value=None):
+            with TestClient(main.app) as client:
+                response = client.post("/api/exif", content=b"test", headers={"x-file-name": "photo.jpg"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "not_configured")
+    def test_watch_crud_roundtrip_and_detectable_diff(self):
+        diff = main._diff_nodes(
+            [
+                {"title": "MX Записи", "state": "completed"},
+                {"title": "WHOIS Домена", "state": "completed"},
+            ],
+            [
+                {"title": "MX Записи", "state": "failed"},
+                {"title": "DNS Записи", "state": "completed"},
+            ],
+        )
+        self.assertEqual(diff["added"], ["DNS Записи"])
+        self.assertEqual(diff["removed"], ["WHOIS Домена"])
+        self.assertEqual(diff["changed"], [{"title": "MX Записи", "from": "completed", "to": "failed"}])
+        with TestClient(main.app) as client:
+            created = client.post("/api/watch", json={"query": "example.com", "query_type": "domain", "depth": 1, "interval_minutes": 5})
+            self.assertEqual(created.status_code, 200, created.text)
+            watch_id = created.json()["id"]
+            watches = client.get("/api/watch").json()["watches"]
+            self.assertIn(watch_id, [item["id"] for item in watches])
+            deleted = client.delete(f"/api/watch/{watch_id}")
+            self.assertEqual(deleted.json()["deleted"], True)
+    def test_organization_scan_runs_public_registry_checks(self):
+        with (
+            patch("main.check_wikidata_organization", new_callable=AsyncMock, return_value={"title": "Организации (Wikidata)", "status": "completed", "fields": []}),
+            patch("main.check_github_organization", new_callable=AsyncMock, return_value={"title": "Организация GitHub", "status": "no_results", "fields": []}),
+            TestClient(main.app) as client,
+        ):
+            with client.websocket_connect("/ws/scan") as websocket:
+                websocket.send_json({"query": "Yandex", "query_type": "organization", "depth": 1})
+                titles = []
+                while True:
+                    message = websocket.receive_json()
+                    if message["type"] == "node":
+                        titles.append(message["data"]["title"])
+                    elif message["type"] == "done":
+                        break
+        self.assertIn("Организации (Wikidata)", titles)
+        self.assertIn("Организация GitHub", titles)
 if __name__ == "__main__":
     unittest.main()

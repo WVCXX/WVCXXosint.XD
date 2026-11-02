@@ -1,4 +1,13 @@
 import { Handle, Position } from 'reactflow';
+import { useContext, useMemo } from 'react';
+import { ExternalLink } from 'lucide-react';
+import {
+  LanguageContext,
+  ToastContext,
+  categoryLabel,
+  statusLabel,
+  timeAgo,
+} from '../i18n';
 
 function SkeletonFields() {
   return (
@@ -10,7 +19,27 @@ function SkeletonFields() {
   );
 }
 
+function ConfidenceBar({ level, language }) {
+  const widthByLevel = { high: '100%', medium: '66%', low: '33%' };
+  const classByLevel = { high: 'confidence-high', medium: 'confidence-medium', low: 'confidence-low' };
+  if (!level) return null;
+  return (
+    <span
+      className={`node-confidence ${classByLevel[level] || 'confidence-medium'}`}
+      title={level === 'high'
+        ? (language === 'ru' ? 'Высокое доверие' : 'High confidence')
+        : level === 'low'
+          ? (language === 'ru' ? 'Низкое доверие' : 'Low confidence')
+          : (language === 'ru' ? 'Среднее доверие' : 'Medium confidence')}
+    >
+      <i style={{ width: widthByLevel[level] || '66%' }} />
+    </span>
+  );
+}
+
 export default function NodeCard({ data }) {
+  const language = useContext(LanguageContext);
+  const pushToast = useContext(ToastContext);
   const {
     title = 'Результат проверки',
     status = 'info',
@@ -22,24 +51,27 @@ export default function NodeCard({ data }) {
     inputType = '',
   } = data || {};
   const displayStatus = data?.state || status;
-  const statusLabels = {
-    ok: 'Подтверждено',
-    completed: 'Завершено',
-    error: 'Ошибка',
-    failed: 'Ошибка',
-    info: 'Информация',
-    partial: 'Частичный результат',
-    no_results: 'Нет результатов',
-    rate_limited: 'Лимит запросов',
-    not_configured: 'Не подключено',
-    loading: 'Загрузка',
-    root: 'Объект',
+  const confidence = data?.confidence;
+  const category = data?.category;
+  const sourceUrl = data?.source_url;
+  const receivedAt = data?.received_at;
+
+  const countLabel = useMemo(() => {
+    if (language === 'en') {
+      return count === 1 ? 'card' : 'cards';
+    }
+    if (count % 10 === 1 && count % 100 !== 11) return 'карточка';
+    if (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14)) return 'карточки';
+    return 'карточек';
+  }, [count, language]);
+
+  const copyValue = (event, value) => {
+    event.stopPropagation();
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(String(value)).catch(() => {});
+    }
+    pushToast(language === 'ru' ? 'Скопировано' : 'Copied');
   };
-  const countLabel = count % 10 === 1 && count % 100 !== 11
-    ? 'карточка'
-    : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14)
-      ? 'карточки'
-      : 'карточек';
 
   return (
     <article className={`node-card status-${displayStatus}${isRoot ? ' node-card-root' : ''}${isCategory ? ' node-card-category' : ''}`}>
@@ -49,8 +81,9 @@ export default function NodeCard({ data }) {
         <header className="node-card-header">
           <h3>{title}</h3>
           {!isRoot && !isCategory ? (
-            <span className="node-status-label">{statusLabels[displayStatus] || statusLabels.info}</span>
-          ) : null}
+            <span className="node-status-label">{statusLabel(displayStatus, language)}</span>
+          ) : !isRoot && isCategory ? null : null}
+          {!isRoot && !isCategory ? <ConfidenceBar level={confidence} language={language} /> : null}
         </header>
 
         {isRoot ? (
@@ -60,8 +93,8 @@ export default function NodeCard({ data }) {
           </div>
         ) : isCategory ? (
           <div className="node-category-meta">
-            <span>ГРУППА РЕЗУЛЬТАТОВ</span>
-            <span>{count} {countLabel}</span>
+            <span>{categoryLabel(category, language) || ''}</span>
+            <span className="node-category-count">{count} {countLabel}</span>
           </div>
         ) : displayStatus === 'loading' ? (
           <SkeletonFields />
@@ -74,17 +107,47 @@ export default function NodeCard({ data }) {
                 <div className="node-field" key={`${field.label}-${index}`}>
                   <span className="node-field-label">{field.label}</span>
                   {isLink ? (
-                    <a href={value} target="_blank" rel="noreferrer">
+                    <a
+                      className="node-field-value is-link"
+                      href={value}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(event) => event.stopPropagation()}
+                    >
                       {value.replace(/^https?:\/\//i, '')}
                     </a>
                   ) : (
-                    <span className="node-field-value">{value}</span>
+                    <button
+                      type="button"
+                      className="node-field-value copyable"
+                      title={`${field.label}: ${value} — ${language === 'ru' ? 'клик — скопировать' : 'click — copy'}`}
+                      onClick={(event) => copyValue(event, value)}
+                    >
+                      {value}
+                    </button>
                   )}
                 </div>
               );
             })}
           </div>
         )}
+        {!isRoot && !isCategory && (sourceUrl || receivedAt) ? (
+          <div className="node-proof-meta">
+            {sourceUrl ? (
+              <a
+                className="node-source-link"
+                href={sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <ExternalLink aria-hidden="true" />
+                {language === 'ru' ? 'Источник' : 'Source'}
+              </a>
+            ) : null}
+            {receivedAt ? <time dateTime={receivedAt}>{timeAgo(receivedAt, language)}</time> : null}
+          </div>
+        ) : null}
       </div>
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </article>
